@@ -35,9 +35,10 @@ class GameTimeService : AccessibilityService() {
         private const val NOTIFICATION_ID = 1
         const val DUOLINGO_PACKAGE = "com.duolingo"
         private const val STUDY_TICK_MS = 60_000L
-        private const val CONSUME_TICK_MS = 1_000L
+        private const val CONSUME_TICK_MS = 5_000L
         private const val IDLE_TIMEOUT_MS = 30_000L
         private const val STUDY_GUARD_MS = 3_000L
+        private const val PROCESS_CHECK_FAILURES_MAX = 3
     }
 
     enum class State { IDLE, STUDYING }
@@ -82,39 +83,48 @@ class GameTimeService : AccessibilityService() {
         }
     }
 
+    private var lastConsumeTimestamp = 0L
     private var consumeTickCount = 0
     private var processCheckFailures = 0
+    private var totalConsumedThisSession = 0L
 
     private val consumeTick = object : Runnable {
         override fun run() {
             if (!isGameForeground) return
 
-            // Every 5 seconds, verify game process is still running
-            if (consumeTickCount > 0 && consumeTickCount % 5 == 0) {
-                if (!isGameProcessStillForeground()) {
-                    processCheckFailures++
-                    Log.d(TAG, "Process check failed ($processCheckFailures/3)")
-                    if (processCheckFailures >= 3) {
-                        Log.d(TAG, "Game process lost (3 consecutive failures), stopping")
-                        stopConsuming()
-                        return
+            // Wall-clock consumption: calculate elapsed since last tick
+            val now = System.currentTimeMillis()
+            val elapsed = (now - lastConsumeTimestamp) / 1000
+            if (elapsed > 0) {
+                val balance = TimeBank.getGameBalance()
+                val toConsume = minOf(elapsed, balance.coerceAtLeast(0))
+                if (toConsume > 0) {
+                    TimeBank.consumeGameSeconds(toConsume)
+                    consumeTickCount += toConsume.toInt()
+                    totalConsumedThisSession += toConsume
+                    if (consumeTickCount >= 60) {
+                        TimeBank.recordHourlyGame(consumeTickCount.toLong())
+                        consumeTickCount = 0
                     }
-                } else {
-                    processCheckFailures = 0
                 }
+                lastConsumeTimestamp = now
             }
 
-            TimeBank.consumeGameSeconds(1)
-            consumeTickCount++
-            // Record hourly every 60 ticks (60 seconds)
-            if (consumeTickCount >= 60) {
-                TimeBank.recordHourlyGame(consumeTickCount.toLong())
-                consumeTickCount = 0
+            // Process check: verify game is still alive
+            if (!isGameProcessStillForeground()) {
+                processCheckFailures++
+                Log.d(TAG, "Process check failed ($processCheckFailures/$PROCESS_CHECK_FAILURES_MAX)")
+                if (processCheckFailures >= PROCESS_CHECK_FAILURES_MAX) {
+                    Log.d(TAG, "Game process lost, stopping (consumed ${totalConsumedThisSession}s this session)")
+                    stopConsuming()
+                    return
+                }
+            } else {
+                processCheckFailures = 0
             }
+
             val balance = TimeBank.getGameBalance()
             val dailyRemaining = TimeBank.getDailyGameRemainingSeconds()
-
-            updateOverlay(balance)
             when {
                 !TimeBank.isWithinGameTimeWindow() -> {
                     ActivityLog.record("GAME_BLOCK", "", "游戏时段结束，强制关闭")
@@ -131,7 +141,7 @@ class GameTimeService : AccessibilityService() {
                     handler.postDelayed(this, CONSUME_TICK_MS)
                 }
             }
-            Log.d(TAG, "Consume tick: balance=${balance}s, dailyRemaining=${dailyRemaining}s")
+            Log.d(TAG, "Tick: consumed=${totalConsumedThisSession}s, balance=${balance}s")
         }
     }
 
@@ -317,6 +327,10 @@ class GameTimeService : AccessibilityService() {
                 }
                 isGameForeground = true
                 currentGamePkg = pkg
+                lastConsumeTimestamp = System.currentTimeMillis()
+                processCheckFailures = 0
+                consumeTickCount = 0
+                totalConsumedThisSession = 0
                 ActivityLog.record("GAME_OPEN", pkg, "游戏启动: $pkg, 余额: ${balance}s, 今日剩余: ${dailyRemaining}s")
                 handler.post(consumeTick)
             }
@@ -324,17 +338,31 @@ class GameTimeService : AccessibilityService() {
     }
 
     private fun stopConsuming() {
+        // Final catch-up: consume any time since last tick
+        if (lastConsumeTimestamp > 0) {
+            val elapsed = (System.currentTimeMillis() - lastConsumeTimestamp) / 1000
+            if (elapsed > 0) {
+                val balance = TimeBank.getGameBalance()
+                val toConsume = minOf(elapsed, balance.coerceAtLeast(0))
+                if (toConsume > 0) {
+                    TimeBank.consumeGameSeconds(toConsume)
+                    totalConsumedThisSession += toConsume
+                }
+            }
+        }
         val balance = TimeBank.getGameBalance()
-        if (consumeTickCount > 0) {
-            TimeBank.recordHourlyGame(consumeTickCount.toLong())
+        if (consumeTickCount > 0 || totalConsumedThisSession > 0) {
+            TimeBank.recordHourlyGame((consumeTickCount + (totalConsumedThisSession % 60).toInt()).toLong())
             consumeTickCount = 0
         }
-        ActivityLog.record("GAME_CLOSE", currentGamePkg ?: "", "游戏关闭，剩余余额: ${balance}秒")
+        ActivityLog.record("GAME_CLOSE", currentGamePkg ?: "", "游戏关闭，本次共消耗: ${totalConsumedThisSession}秒，剩余余额: ${balance}秒")
         isGameForeground = false
         currentGamePkg = null
+        lastConsumeTimestamp = 0L
+        totalConsumedThisSession = 0
         handler.removeCallbacks(consumeTick)
         hideBlockScreen()
-        Log.d(TAG, "Stopped consuming, balance=${balance}s")
+        Log.d(TAG, "Stopped consuming, session total=${totalConsumedThisSession}s, balance=${balance}s")
     }
 
     private fun showBlockOverlay() {
