@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
 
 enum class Screen { DASHBOARD, SETTINGS, PERMISSIONS }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainNavHost() {
     var currentScreen by remember { mutableStateOf(Screen.DASHBOARD) }

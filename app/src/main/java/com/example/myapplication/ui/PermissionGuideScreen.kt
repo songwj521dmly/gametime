@@ -28,6 +28,7 @@ data class PermissionItem(
     val action: (Context) -> Unit
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PermissionGuideScreen(onBack: () -> Unit) {
     val context = LocalContext.current

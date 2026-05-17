@@ -19,6 +19,7 @@ import com.example.myapplication.data.TimeBank
 
 data class AppInfo(val packageName: String, val label: String)
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit
@@ -103,6 +104,7 @@ fun SettingsScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AddGameDialog(
     installedApps: List<AppInfo>,
