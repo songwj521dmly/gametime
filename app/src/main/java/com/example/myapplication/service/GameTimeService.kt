@@ -7,12 +7,22 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
 import com.example.myapplication.MainActivity
+import com.example.myapplication.data.ActivityLog
+import com.example.myapplication.data.EmailReporter
 import com.example.myapplication.data.TimeBank
 import com.example.myapplication.model.ExchangeEngine
 
@@ -31,10 +41,12 @@ class GameTimeService : AccessibilityService() {
     enum class State { IDLE, STUDYING }
 
     private var state = State.IDLE
-    private var studyAccumulatorSeconds = 0L
+    private var lastStudyTickTime = 0L
     private var lastInteractionTime = 0L
     private var isGameForeground = false
     private var blockedPackages: Set<String> = emptySet()
+    private var blockOverlay: View? = null
+    private var windowManager: WindowManager? = null
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -47,30 +59,50 @@ class GameTimeService : AccessibilityService() {
                     TimeBank.isWeekend()
                 )
                 TimeBank.recordSettlement(STUDY_TICK_MS / 1000, earned)
-                studyAccumulatorSeconds = 0L
+                TimeBank.recordHourlyStudy(STUDY_TICK_MS / 1000 / 60)
+                lastStudyTickTime = System.currentTimeMillis()
                 Log.d(TAG, "Study tick: earned ${earned}s, balance=${TimeBank.getGameBalance()}s")
                 handler.postDelayed(this, STUDY_TICK_MS)
             }
         }
     }
 
+    private var consumeTickCount = 0
+
     private val consumeTick = object : Runnable {
         override fun run() {
             if (isGameForeground) {
                 TimeBank.consumeGameSeconds(1)
-                val balance = TimeBank.getGameBalance()
-                updateOverlay(balance)
-                if (balance <= 0) {
-                    showBlockOverlay()
-                    handler.postDelayed({
-                        if (TimeBank.getGameBalance() <= 0) {
-                            goHome()
-                        }
-                    }, 60_000L)
-                } else {
-                    handler.postDelayed(this, CONSUME_TICK_MS)
+                consumeTickCount++
+                // Record hourly every 60 ticks (60 seconds)
+                if (consumeTickCount >= 60) {
+                    TimeBank.recordHourlyGame(consumeTickCount.toLong())
+                    consumeTickCount = 0
                 }
-                Log.d(TAG, "Consume tick: balance=${balance}s")
+                val balance = TimeBank.getGameBalance()
+                val dailyRemaining = TimeBank.getDailyGameRemainingSeconds()
+
+                updateOverlay(balance)
+                when {
+                    // Check time window
+                    !TimeBank.isWithinGameTimeWindow() -> {
+                        ActivityLog.record("GAME_BLOCK", "", "游戏时段结束，强制关闭")
+                        showBlockOverlay()
+                    }
+                    // Check daily limit
+                    dailyRemaining <= 0 -> {
+                        ActivityLog.record("GAME_BLOCK", "", "今日游戏时长已达上限")
+                        showBlockOverlay()
+                    }
+                    // Check balance
+                    balance <= 0 -> {
+                        showBlockOverlay()
+                    }
+                    else -> {
+                        handler.postDelayed(this, CONSUME_TICK_MS)
+                    }
+                }
+                Log.d(TAG, "Consume tick: balance=${balance}s, dailyRemaining=${dailyRemaining}s")
             }
         }
     }
@@ -78,6 +110,8 @@ class GameTimeService : AccessibilityService() {
     override fun onCreate() {
         super.onCreate()
         TimeBank.init(this)
+        ActivityLog.init(this)
+        EmailReporter.init(this)
         createNotificationChannel()
     }
 
@@ -99,11 +133,32 @@ class GameTimeService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: return
+        val eventType = event.eventType
+        val typeName = eventTypeToString(eventType)
+
+        Log.d(TAG, "Event: pkg=$pkg type=$typeName($eventType)")
 
         when {
             pkg == DUOLINGO_PACKAGE -> handleDuolingoEvent(event)
             blockedPackages.contains(pkg) -> handleGameEvent(event, pkg)
+            eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && isGameForeground -> {
+                Log.d(TAG, "Game left foreground, stopping consume tick")
+                stopConsuming()
+            }
         }
+    }
+
+    private fun eventTypeToString(type: Int): String = when (type) {
+        AccessibilityEvent.TYPE_VIEW_CLICKED -> "VIEW_CLICKED"
+        AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> "TEXT_CHANGED"
+        AccessibilityEvent.TYPE_VIEW_SCROLLED -> "VIEW_SCROLLED"
+        AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "WINDOW_STATE_CHANGED"
+        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "CONTENT_CHANGED"
+        AccessibilityEvent.TYPE_VIEW_FOCUSED -> "VIEW_FOCUSED"
+        AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> "VIEW_LONG_CLICKED"
+        AccessibilityEvent.TYPE_VIEW_SELECTED -> "VIEW_SELECTED"
+        AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> "NOTIFICATION"
+        else -> "OTHER($type)"
     }
 
     private fun handleDuolingoEvent(event: AccessibilityEvent) {
@@ -128,7 +183,8 @@ class GameTimeService : AccessibilityService() {
 
     private fun enterStudying() {
         state = State.STUDYING
-        studyAccumulatorSeconds = 0L
+        lastStudyTickTime = System.currentTimeMillis()
+        ActivityLog.record("STUDY", DUOLINGO_PACKAGE, "开始学习多邻国")
         Log.d(TAG, "Enter STUDYING")
         handler.postDelayed(studyTick, STUDY_TICK_MS)
         updateNotification("学习中…")
@@ -137,17 +193,19 @@ class GameTimeService : AccessibilityService() {
     private fun exitStudying() {
         if (state != State.STUDYING) return
         handler.removeCallbacks(studyTick)
-        if (studyAccumulatorSeconds > 0) {
+        val elapsedSeconds = (System.currentTimeMillis() - lastStudyTickTime) / 1000
+        if (elapsedSeconds > 0) {
             val earned = ExchangeEngine.calculateEarnedSeconds(
-                studyAccumulatorSeconds,
+                elapsedSeconds,
                 TimeBank.getConsecutiveDays(),
                 TimeBank.isWeekend()
             )
-            TimeBank.recordSettlement(studyAccumulatorSeconds, earned)
+            TimeBank.recordSettlement(elapsedSeconds, earned)
+            TimeBank.recordHourlyStudy(elapsedSeconds / 60)
         }
         state = State.IDLE
-        studyAccumulatorSeconds = 0L
-        Log.d(TAG, "Exit STUDYING, balance=${TimeBank.getGameBalance()}s")
+        ActivityLog.record("STUDY_END", DUOLINGO_PACKAGE, "结束学习 ${elapsedSeconds / 60}分${elapsedSeconds % 60}秒")
+        Log.d(TAG, "Exit STUDYING, elapsed=${elapsedSeconds}s, balance=${TimeBank.getGameBalance()}s")
         updateNotification("就绪")
     }
 
@@ -164,19 +222,50 @@ class GameTimeService : AccessibilityService() {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         val balance = TimeBank.getGameBalance()
-        if (balance <= 0) {
-            showBlockOverlay()
-        } else if (!isGameForeground) {
-            isGameForeground = true
-            handler.post(consumeTick)
+        val dailyRemaining = TimeBank.getDailyGameRemainingSeconds()
+
+        when {
+            // Check time window first
+            !TimeBank.isWithinGameTimeWindow() -> {
+                ActivityLog.record("GAME_BLOCK", pkg, "非游戏时段，拦截")
+                showBlockOverlay()
+            }
+            // Check daily limit
+            dailyRemaining <= 0 -> {
+                ActivityLog.record("GAME_BLOCK", pkg, "今日游戏时长已达上限，拦截")
+                showBlockOverlay()
+            }
+            // Check balance
+            balance <= 0 -> {
+                ActivityLog.record("GAME_BLOCK", pkg, "余额不足，拦截")
+                showBlockOverlay()
+            }
+            // All clear - start game
+            !isGameForeground -> {
+                isGameForeground = true
+                ActivityLog.record("GAME_OPEN", pkg, "游戏启动: $pkg, 余额: ${balance}s, 今日剩余: ${dailyRemaining}s")
+                handler.post(consumeTick)
+            }
         }
     }
 
-    private fun showBlockOverlay() {
+    private fun stopConsuming() {
+        val balance = TimeBank.getGameBalance()
+        if (consumeTickCount > 0) {
+            TimeBank.recordHourlyGame(consumeTickCount.toLong())
+            consumeTickCount = 0
+        }
+        ActivityLog.record("GAME_CLOSE", "", "游戏关闭，剩余余额: ${balance}秒")
         isGameForeground = false
         handler.removeCallbacks(consumeTick)
+        hideBlockScreen()
+        Log.d(TAG, "Stopped consuming, balance=${balance}s")
+    }
+
+    private fun showBlockOverlay() {
+        stopConsuming()
+        showBlockScreen()
         updateNotification("游戏时间已用完")
-        goHome()
     }
 
     private fun updateOverlay(balance: Long) {
@@ -185,12 +274,64 @@ class GameTimeService : AccessibilityService() {
         }
     }
 
-    private fun goHome() {
-        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_HOME)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    private fun showBlockScreen() {
+        if (blockOverlay != null) return
+        val wm = windowManager ?: run {
+            windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+            windowManager!!
         }
-        startActivity(homeIntent)
+        val ctx = this
+        val layout = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.argb(220, 0, 0, 0))
+            gravity = Gravity.CENTER
+        }
+        val text = TextView(ctx).apply {
+            text = "⏰ 游戏时间已用完\n\n去多邻国学习赚取时间吧！"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(40, 40, 40, 40)
+        }
+        layout.addView(text)
+        val btn = Button(ctx).apply {
+            setText("返回桌面")
+            setOnClickListener {
+                hideBlockScreen()
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+        }
+        layout.addView(btn)
+        blockOverlay = layout
+
+        val params = WindowManager.LayoutParams().apply {
+            type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            format = PixelFormat.TRANSLUCENT
+            width = WindowManager.LayoutParams.MATCH_PARENT
+            height = WindowManager.LayoutParams.MATCH_PARENT
+            gravity = Gravity.CENTER
+        }
+        wm.addView(layout, params)
+        Log.d(TAG, "Block screen shown")
+    }
+
+    private fun hideBlockScreen() {
+        val overlay = blockOverlay ?: return
+        try {
+            windowManager?.removeView(overlay)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to remove overlay: ${e.message}")
+        }
+        blockOverlay = null
+        Log.d(TAG, "Block screen hidden")
     }
 
     private fun createNotificationChannel() {

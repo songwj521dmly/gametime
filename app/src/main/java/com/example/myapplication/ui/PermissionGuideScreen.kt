@@ -1,6 +1,8 @@
 package com.example.myapplication.ui
 
 import android.app.AppOpsManager
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -9,6 +11,7 @@ import android.os.Process
 import android.provider.Settings
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.view.accessibility.AccessibilityManager
+import com.example.myapplication.admin.AdminReceiver
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -95,6 +98,24 @@ fun PermissionGuideScreen(onBack: () -> Unit) {
                     }
                     ctx.startActivity(intent)
                 }
+            }
+        ),
+        PermissionItem(
+            name = "设备管理器",
+            description = "防止应用被卸载。激活后必须先取消才能删除。必须开启。",
+            isGranted = checkDeviceAdmin(context),
+            action = { ctx ->
+                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                    putExtra(
+                        DevicePolicyManager.EXTRA_DEVICE_ADMIN,
+                        ComponentName(ctx, AdminReceiver::class.java)
+                    )
+                    putExtra(
+                        DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                        "激活设备管理器以防止 GameTime 被卸载"
+                    )
+                }
+                ctx.startActivity(intent)
             }
         )
     )
@@ -248,4 +269,9 @@ private fun checkNotificationPermission(context: Context): Boolean {
     } else {
         true
     }
+}
+
+private fun checkDeviceAdmin(context: Context): Boolean {
+    val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    return dpm.isAdminActive(ComponentName(context, AdminReceiver::class.java))
 }

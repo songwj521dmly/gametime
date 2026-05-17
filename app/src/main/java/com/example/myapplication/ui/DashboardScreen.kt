@@ -1,10 +1,12 @@
 package com.example.myapplication.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -14,7 +16,8 @@ import com.example.myapplication.data.TimeBank
 @Composable
 fun DashboardScreen(
     onNavigateToSettings: () -> Unit,
-    onNavigateToPermissions: () -> Unit
+    onNavigateToPermissions: () -> Unit,
+    onNavigateToLogs: () -> Unit
 ) {
     var tick by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) {
@@ -29,6 +32,7 @@ fun DashboardScreen(
 
     val studyMinutes = TimeBank.getStudyMinutesToday()
     val gameBalanceSeconds = TimeBank.getGameBalance()
+    val gameConsumedSeconds = TimeBank.getGameConsumedSecondsToday()
     val streakDays = TimeBank.getConsecutiveDays()
     val isWeekend = TimeBank.isWeekend()
     val streakBonus = TimeBank.getCurrentStreakBonus()
@@ -40,6 +44,9 @@ fun DashboardScreen(
             TopAppBar(
                 title = { Text("GameTime") },
                 actions = {
+                    TextButton(onClick = onNavigateToLogs) {
+                        Text("日志")
+                    }
                     TextButton(onClick = onNavigateToPermissions) {
                         Text("权限")
                     }
@@ -54,11 +61,11 @@ fun DashboardScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(24.dp),
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Study time card
+            // Study + Streak card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -75,6 +82,39 @@ fun DashboardScreen(
                         fontSize = 40.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val baseRate = if (isWeekend) "节假日 ×2.0" else "日常 ×1.0"
+                        Text(
+                            "🔥 ${streakDays}天 · +${(streakBonus * 100).toInt()}%",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            "  |  ",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.4f)
+                        )
+                        Text(
+                            baseRate,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isWeekend)
+                                Color(0xFFFF6D00)
+                            else
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    StreakMilestones(
+                        currentStreak = streakDays,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
@@ -97,21 +137,61 @@ fun DashboardScreen(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
+                    if (gameConsumedSeconds > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "今日已用 ${formatSeconds(gameConsumedSeconds)}",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                        )
+                    }
                 }
             }
 
-            // Status info
-            Card(modifier = Modifier.fillMaxWidth()) {
+            val gameLimit = TimeBank.getDailyGameLimitSeconds()
+            val gameRemaining = TimeBank.getDailyGameRemainingSeconds()
+            val inWindow = TimeBank.isWithinGameTimeWindow()
+
+            // Restrictions card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (inWindow && gameRemaining > 0)
+                        MaterialTheme.colorScheme.surface
+                    else
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f)
+                )
+            ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    InfoRow("连续打卡", "${streakDays}天")
-                    InfoRow("打卡加成", "+${(streakBonus * 100).toInt()}%")
-                    InfoRow("周末状态", if (isWeekend) "双倍中" else "平日")
-                    InfoRow("综合倍率", "x${String.format("%.1f", totalMultiplier)}")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            if (isWeekend) "节假日模式 (2h/天)" else "工作日模式 (1h/天)",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            if (inWindow) "8:00-22:30 ✓" else "⛔ 非游戏时段",
+                            fontSize = 13.sp,
+                            color = if (inWindow) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.error
+                        )
+                    }
+                    Text(
+                        "今日游戏剩余 ${formatSeconds(gameRemaining)} / ${formatSeconds(gameLimit)}",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
+
+            // Calendar chart
+            CalendarChart()
 
             // Quick tip
             Card(
@@ -135,13 +215,69 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
+private fun StreakMilestones(currentStreak: Int, modifier: Modifier = Modifier) {
+    val milestones = listOf(
+        1 to "+5%",
+        2 to "+10%",
+        3 to "+15%",
+        4 to "+20%",
+        5 to "+25%封顶"
+    )
+
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+        modifier = modifier,
+        horizontalArrangement = Arrangement.SpaceEvenly
     ) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontWeight = FontWeight.Medium)
+        milestones.forEach { (day, bonus) ->
+            val achieved = currentStreak >= day
+            val isCurrent = currentStreak + 1 == day
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.width(56.dp)
+            ) {
+                // Circle indicator
+                Surface(
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                    color = when {
+                        achieved -> MaterialTheme.colorScheme.primary
+                        isCurrent -> MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                        else -> MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f)
+                    },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        if (achieved) {
+                            Text(
+                                "✓",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Text(
+                                "$day",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isCurrent)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    bonus,
+                    fontSize = 10.sp,
+                    fontWeight = if (achieved) FontWeight.Bold else FontWeight.Normal,
+                    color = if (achieved)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
+                )
+            }
+        }
     }
 }
 

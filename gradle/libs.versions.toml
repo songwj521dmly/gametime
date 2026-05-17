@@ -25,6 +25,8 @@ androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-
 androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+android-mail = { group = "com.sun.mail", name = "android-mail", version = "1.6.7" }
+android-activation = { group = "com.sun.mail", name = "android-activation", version = "1.6.7" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
