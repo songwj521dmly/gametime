@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">My Application</string>
+    <string name="app_name">GameTime</string>
+    <string name="accessibility_service_description">用于检测多邻国学习状态和管理游戏应用使用时间。开启后，多邻国学习时间将自动转换为游戏时间。</string>
 </resources>
