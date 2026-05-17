@@ -9,6 +9,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.app.ActivityManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -72,40 +73,57 @@ class GameTimeService : AccessibilityService() {
 
     private val consumeTick = object : Runnable {
         override fun run() {
-            if (isGameForeground) {
-                TimeBank.consumeGameSeconds(1)
-                consumeTickCount++
-                // Record hourly every 60 ticks (60 seconds)
-                if (consumeTickCount >= 60) {
-                    TimeBank.recordHourlyGame(consumeTickCount.toLong())
-                    consumeTickCount = 0
-                }
-                val balance = TimeBank.getGameBalance()
-                val dailyRemaining = TimeBank.getDailyGameRemainingSeconds()
+            if (!isGameForeground) return
 
-                updateOverlay(balance)
-                when {
-                    // Check time window
-                    !TimeBank.isWithinGameTimeWindow() -> {
-                        ActivityLog.record("GAME_BLOCK", "", "游戏时段结束，强制关闭")
-                        showBlockOverlay()
-                    }
-                    // Check daily limit
-                    dailyRemaining <= 0 -> {
-                        ActivityLog.record("GAME_BLOCK", "", "今日游戏时长已达上限")
-                        showBlockOverlay()
-                    }
-                    // Check balance
-                    balance <= 0 -> {
-                        showBlockOverlay()
-                    }
-                    else -> {
-                        handler.postDelayed(this, CONSUME_TICK_MS)
-                    }
-                }
-                Log.d(TAG, "Consume tick: balance=${balance}s, dailyRemaining=${dailyRemaining}s")
+            // Every 3 seconds (starting from 3rd tick), verify game process is still running
+            if (consumeTickCount > 0 && consumeTickCount % 3 == 0 && !isGameProcessStillForeground()) {
+                Log.d(TAG, "Game process no longer foreground, stopping")
+                stopConsuming()
+                return
             }
+
+            TimeBank.consumeGameSeconds(1)
+            consumeTickCount++
+            // Record hourly every 60 ticks (60 seconds)
+            if (consumeTickCount >= 60) {
+                TimeBank.recordHourlyGame(consumeTickCount.toLong())
+                consumeTickCount = 0
+            }
+            val balance = TimeBank.getGameBalance()
+            val dailyRemaining = TimeBank.getDailyGameRemainingSeconds()
+
+            updateOverlay(balance)
+            when {
+                !TimeBank.isWithinGameTimeWindow() -> {
+                    ActivityLog.record("GAME_BLOCK", "", "游戏时段结束，强制关闭")
+                    showBlockOverlay()
+                }
+                dailyRemaining <= 0 -> {
+                    ActivityLog.record("GAME_BLOCK", "", "今日游戏时长已达上限")
+                    showBlockOverlay()
+                }
+                balance <= 0 -> {
+                    showBlockOverlay()
+                }
+                else -> {
+                    handler.postDelayed(this, CONSUME_TICK_MS)
+                }
+            }
+            Log.d(TAG, "Consume tick: balance=${balance}s, dailyRemaining=${dailyRemaining}s")
         }
+    }
+
+    private fun isGameProcessStillForeground(): Boolean {
+        val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val processes = am.runningAppProcesses ?: return true // can't check, assume still running
+        val result = processes.any { proc ->
+            proc.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
+            blockedPackages.any { proc.processName.startsWith(it) }
+        }
+        if (!result) {
+            Log.d(TAG, "No blocked game process found in foreground")
+        }
+        return result
     }
 
     override fun onCreate() {
@@ -142,11 +160,6 @@ class GameTimeService : AccessibilityService() {
         when {
             pkg == DUOLINGO_PACKAGE -> handleDuolingoEvent(event)
             blockedPackages.contains(pkg) -> handleGameEvent(event, pkg)
-            isGameForeground && eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // A non-tracked app (launcher, system UI, etc.) came to foreground
-                Log.d(TAG, "Non-game app appeared, stopping consume tick. pkg=$pkg")
-                stopConsuming()
-            }
         }
     }
 
