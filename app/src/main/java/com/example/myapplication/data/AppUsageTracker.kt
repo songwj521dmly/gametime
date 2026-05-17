@@ -47,8 +47,7 @@ object AppUsageTracker {
             .filter { it.packageName == "com.duolingo" }
             .sumOf { it.totalTimeInForeground / 1000 }
 
-        val timeBankMinutes = TimeBank.getStudyMinutesToday()
-        val timeBankSeconds = timeBankMinutes * 60
+        val timeBankSeconds = TimeBank.getStudySecondsToday()
 
         if (Math.abs(duolingoFgSeconds - timeBankSeconds) > 120) {
             Log.w(TAG, "Discrepancy: UsageStats=${duolingoFgSeconds}s, TimeBank=${timeBankSeconds}s")

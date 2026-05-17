@@ -53,7 +53,7 @@ object TimeBank {
 
     // --- Daily Study Minutes ---
 
-    fun getStudyMinutesToday(): Long {
+    fun getStudySecondsToday(): Long {
         val map = parseDailyMap()
         return map[todayKey()] ?: 0L
     }
@@ -79,7 +79,7 @@ object TimeBank {
     fun recordSettlement(studySeconds: Long, earnedGameSeconds: Long) {
         val map = parseDailyMap().toMutableMap()
         val key = todayKey()
-        map[key] = (map[key] ?: 0L) + (studySeconds / 60)
+        map[key] = (map[key] ?: 0L) + studySeconds
         // Keep only last 60 days
         val cutoff = LocalDate.now(zoneId).minusDays(60).toString()
         val trimmed = map.filterKeys { it >= cutoff }
@@ -92,12 +92,12 @@ object TimeBank {
 
     // --- Hourly Data ---
 
-    fun recordHourlyStudy(minutes: Long) {
+    fun recordHourlyStudy(seconds: Long) {
         val hour = java.time.LocalTime.now(zoneId).hour.toString()
         val map = parseHourlyMap(KEY_HOURLY_STUDY).toMutableMap()
         val date = todayKey()
         val hourMap = (map[date] ?: emptyMap()).toMutableMap()
-        hourMap[hour] = (hourMap[hour] ?: 0L) + minutes
+        hourMap[hour] = (hourMap[hour] ?: 0L) + seconds
         map[date] = hourMap
         trimAndSaveHourly(KEY_HOURLY_STUDY, map)
     }
@@ -114,7 +114,7 @@ object TimeBank {
 
     data class HourlyStats(
         val hour: Int,
-        val studyMinutes: Long,
+        val studySeconds: Long,
         val gameSeconds: Long
     )
 
@@ -207,8 +207,8 @@ object TimeBank {
         var streak = 0
         var cursor = if (map.containsKey(today.toString())) today else today.minusDays(1)
         while (true) {
-            val minutes = map[cursor.toString()] ?: 0L
-            if (minutes >= 4) {
+            val seconds = map[cursor.toString()] ?: 0L
+            if (seconds >= 240) {
                 streak++
                 cursor = cursor.minusDays(1)
             } else {
@@ -221,7 +221,7 @@ object TimeBank {
 
     fun getLastStudyDate(): String? {
         val map = parseDailyMap()
-        return map.filter { it.value >= 4 }.keys.maxOrNull()
+        return map.filter { it.value >= 240 }.keys.maxOrNull()
     }
 
     // --- Blocked Packages ---
@@ -342,7 +342,7 @@ object TimeBank {
 
     data class DayStats(
         val date: String,
-        val studyMinutes: Long,
+        val studySeconds: Long,
         val gameSeconds: Long
     )
 
@@ -354,7 +354,7 @@ object TimeBank {
             val date = today.minusDays(offset.toLong()).toString()
             DayStats(
                 date = date,
-                studyMinutes = studyMap[date] ?: 0L,
+                studySeconds = studyMap[date] ?: 0L,
                 gameSeconds = gameMap[date] ?: 0L
             )
         }

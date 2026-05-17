@@ -39,7 +39,7 @@ fun CalendarChart(modifier: Modifier = Modifier) {
     }
 
     val maxMinutes = hourlyStats.maxOfOrNull {
-        (it.studyMinutes + it.gameSeconds / 60).toInt()
+        (it.studySeconds / 60 + it.gameSeconds / 60).toInt()
     }?.coerceAtLeast(5) ?: 5
 
     // Round up to nearest 5
@@ -143,7 +143,7 @@ fun CalendarChart(modifier: Modifier = Modifier) {
                 // Bars for each hour
                 hourlyStats.forEach { stat ->
                     val centerX = barAreaWidth * stat.hour + barAreaWidth / 2
-                    val studyHeight = (stat.studyMinutes.toFloat() / yMax * chartHeight).coerceAtLeast(0f)
+                    val studyHeight = (stat.studySeconds / 60f / yMax * chartHeight).coerceAtLeast(0f)
                     val gameHeight = (stat.gameSeconds / 60f / yMax * chartHeight).coerceAtLeast(0f)
                     val baseY = topPadding + chartHeight
 

@@ -30,7 +30,7 @@ fun DashboardScreen(
     @Suppress("UNUSED_EXPRESSION")
     tick
 
-    val studyMinutes = TimeBank.getStudyMinutesToday()
+    val studySeconds = TimeBank.getStudySecondsToday()
     val gameBalanceSeconds = TimeBank.getGameBalance()
     val gameConsumedSeconds = TimeBank.getGameConsumedSecondsToday()
     val streakDays = TimeBank.getConsecutiveDays()
@@ -78,7 +78,7 @@ fun DashboardScreen(
                 ) {
                     Text("今日学习", fontSize = 14.sp)
                     Text(
-                        text = "${studyMinutes}分钟",
+                        text = "${formatSeconds(studySeconds)}",
                         fontSize = 40.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -202,7 +202,7 @@ fun DashboardScreen(
             ) {
                 Text(
                     text = when {
-                        studyMinutes < 4 -> "今天学满4分钟打卡，解锁游戏时间！"
+                        studySeconds < 240 -> "今天学满4分钟打卡，解锁游戏时间！"
                         gameBalanceSeconds > 0 -> "尽情游戏吧，注意时间哦～"
                         else -> "多学多玩，加油！"
                     },

@@ -63,7 +63,7 @@ class GameTimeService : AccessibilityService() {
                 TimeBank.isWeekend()
             )
             TimeBank.recordSettlement(STUDY_TICK_MS / 1000, earned)
-            TimeBank.recordHourlyStudy(STUDY_TICK_MS / 1000 / 60)
+            TimeBank.recordHourlyStudy(STUDY_TICK_MS / 1000)
             lastStudyTickTime = System.currentTimeMillis()
             Log.d(TAG, "Study tick: earned ${earned}s, balance=${TimeBank.getGameBalance()}s")
             handler.postDelayed(this, STUDY_TICK_MS)
@@ -255,7 +255,7 @@ class GameTimeService : AccessibilityService() {
                 TimeBank.isWeekend()
             )
             TimeBank.recordSettlement(elapsedSeconds, earned)
-            TimeBank.recordHourlyStudy(elapsedSeconds / 60)
+            TimeBank.recordHourlyStudy(elapsedSeconds)
         }
         state = State.IDLE
         ActivityLog.record("STUDY_END", DUOLINGO_PACKAGE, "结束学习 ${elapsedSeconds / 60}分${elapsedSeconds % 60}秒")

@@ -129,7 +129,7 @@ object ActivityLog {
         val dailyLimit = TimeBank.getDailyGameLimitSeconds()
         val remaining = TimeBank.getDailyGameRemainingSeconds()
         val isWeekend = TimeBank.isWeekend()
-        val studyMinutes = TimeBank.getStudyMinutesToday()
+        val timeBankStudySeconds = TimeBank.getStudySecondsToday()
 
         fun fmt(sec: Long) = if (sec >= 3600) "${sec / 3600}h${(sec % 3600) / 60}m" else "${sec / 60}m${sec % 60}s"
 
@@ -142,7 +142,7 @@ object ActivityLog {
             appendLine(line)
             appendLine("")
             appendLine("📖 学习")
-            appendLine("   今日学习: ${studyMinutes}分钟")
+            appendLine("   今日学习: ${fmt(timeBankStudySeconds)}")
             appendLine("   连续打卡: ${streak}天 (+${(bonus * 100).toInt()}%)")
             appendLine("   可用余额: ${fmt(balance)}")
             appendLine("")
