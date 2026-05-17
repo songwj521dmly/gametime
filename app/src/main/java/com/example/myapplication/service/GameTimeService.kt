@@ -44,6 +44,7 @@ class GameTimeService : AccessibilityService() {
     private var lastStudyTickTime = 0L
     private var lastInteractionTime = 0L
     private var isGameForeground = false
+    private var currentGamePkg: String? = null
     private var blockedPackages: Set<String> = emptySet()
     private var blockOverlay: View? = null
     private var windowManager: WindowManager? = null
@@ -141,8 +142,9 @@ class GameTimeService : AccessibilityService() {
         when {
             pkg == DUOLINGO_PACKAGE -> handleDuolingoEvent(event)
             blockedPackages.contains(pkg) -> handleGameEvent(event, pkg)
-            eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && isGameForeground -> {
-                Log.d(TAG, "Game left foreground, stopping consume tick")
+            isGameForeground && eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                // A non-tracked app (launcher, system UI, etc.) came to foreground
+                Log.d(TAG, "Non-game app appeared, stopping consume tick. pkg=$pkg")
                 stopConsuming()
             }
         }
@@ -221,6 +223,12 @@ class GameTimeService : AccessibilityService() {
     private fun handleGameEvent(event: AccessibilityEvent, pkg: String) {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
+        // If switching from one game to another, close the previous one first
+        if (isGameForeground && currentGamePkg != pkg) {
+            Log.d(TAG, "Switching game: $currentGamePkg -> $pkg")
+            stopConsuming()
+        }
+
         val balance = TimeBank.getGameBalance()
         val dailyRemaining = TimeBank.getDailyGameRemainingSeconds()
 
@@ -243,6 +251,7 @@ class GameTimeService : AccessibilityService() {
             // All clear - start game
             !isGameForeground -> {
                 isGameForeground = true
+                currentGamePkg = pkg
                 ActivityLog.record("GAME_OPEN", pkg, "游戏启动: $pkg, 余额: ${balance}s, 今日剩余: ${dailyRemaining}s")
                 handler.post(consumeTick)
             }
@@ -255,8 +264,9 @@ class GameTimeService : AccessibilityService() {
             TimeBank.recordHourlyGame(consumeTickCount.toLong())
             consumeTickCount = 0
         }
-        ActivityLog.record("GAME_CLOSE", "", "游戏关闭，剩余余额: ${balance}秒")
+        ActivityLog.record("GAME_CLOSE", currentGamePkg ?: "", "游戏关闭，剩余余额: ${balance}秒")
         isGameForeground = false
+        currentGamePkg = null
         handler.removeCallbacks(consumeTick)
         hideBlockScreen()
         Log.d(TAG, "Stopped consuming, balance=${balance}s")
