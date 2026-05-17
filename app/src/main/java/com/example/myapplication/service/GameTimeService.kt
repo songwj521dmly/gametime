@@ -37,6 +37,7 @@ class GameTimeService : AccessibilityService() {
         private const val STUDY_TICK_MS = 60_000L
         private const val CONSUME_TICK_MS = 1_000L
         private const val IDLE_TIMEOUT_MS = 30_000L
+        private const val STUDY_GUARD_MS = 3_000L
     }
 
     enum class State { IDLE, STUDYING }
@@ -54,32 +55,53 @@ class GameTimeService : AccessibilityService() {
 
     private val studyTick = object : Runnable {
         override fun run() {
-            if (state == State.STUDYING) {
-                val earned = ExchangeEngine.calculateEarnedSeconds(
-                    STUDY_TICK_MS / 1000,
-                    TimeBank.getConsecutiveDays(),
-                    TimeBank.isWeekend()
-                )
-                TimeBank.recordSettlement(STUDY_TICK_MS / 1000, earned)
-                TimeBank.recordHourlyStudy(STUDY_TICK_MS / 1000 / 60)
-                lastStudyTickTime = System.currentTimeMillis()
-                Log.d(TAG, "Study tick: earned ${earned}s, balance=${TimeBank.getGameBalance()}s")
-                handler.postDelayed(this, STUDY_TICK_MS)
+            if (state != State.STUDYING) return
+
+            val earned = ExchangeEngine.calculateEarnedSeconds(
+                STUDY_TICK_MS / 1000,
+                TimeBank.getConsecutiveDays(),
+                TimeBank.isWeekend()
+            )
+            TimeBank.recordSettlement(STUDY_TICK_MS / 1000, earned)
+            TimeBank.recordHourlyStudy(STUDY_TICK_MS / 1000 / 60)
+            lastStudyTickTime = System.currentTimeMillis()
+            Log.d(TAG, "Study tick: earned ${earned}s, balance=${TimeBank.getGameBalance()}s")
+            handler.postDelayed(this, STUDY_TICK_MS)
+        }
+    }
+
+    private val studyGuardCheck = object : Runnable {
+        override fun run() {
+            if (state != State.STUDYING) return
+            if (!isDuolingoProcessForeground()) {
+                Log.d(TAG, "Guard: Duolingo not foreground, exiting study")
+                exitStudying()
+                return
             }
+            handler.postDelayed(this, STUDY_GUARD_MS)
         }
     }
 
     private var consumeTickCount = 0
+    private var processCheckFailures = 0
 
     private val consumeTick = object : Runnable {
         override fun run() {
             if (!isGameForeground) return
 
             // Every 3 seconds (starting from 3rd tick), verify game process is still running
-            if (consumeTickCount > 0 && consumeTickCount % 3 == 0 && !isGameProcessStillForeground()) {
-                Log.d(TAG, "Game process no longer foreground, stopping")
-                stopConsuming()
-                return
+            if (consumeTickCount > 0 && consumeTickCount % 3 == 0) {
+                if (!isGameProcessStillForeground()) {
+                    processCheckFailures++
+                    Log.d(TAG, "Process check failed ($processCheckFailures/2)")
+                    if (processCheckFailures >= 2) {
+                        Log.d(TAG, "Game process lost (2 consecutive failures), stopping")
+                        stopConsuming()
+                        return
+                    }
+                } else {
+                    processCheckFailures = 0
+                }
             }
 
             TimeBank.consumeGameSeconds(1)
@@ -113,15 +135,30 @@ class GameTimeService : AccessibilityService() {
         }
     }
 
+    private fun isDuolingoProcessForeground(): Boolean {
+        val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val processes = am.runningAppProcesses ?: return true
+        return processes.any { proc ->
+            (proc.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+             proc.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) &&
+            (proc.processName.startsWith(DUOLINGO_PACKAGE) ||
+             proc.pkgList?.any { it == DUOLINGO_PACKAGE } == true)
+        }
+    }
+
     private fun isGameProcessStillForeground(): Boolean {
         val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
-        val processes = am.runningAppProcesses ?: return true // can't check, assume still running
+        val processes = am.runningAppProcesses ?: return true
         val result = processes.any { proc ->
-            proc.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
-            blockedPackages.any { proc.processName.startsWith(it) }
+            (proc.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+             proc.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) &&
+            blockedPackages.any { blocked ->
+                proc.processName.startsWith(blocked) ||
+                proc.pkgList?.any { pkg -> pkg == blocked } == true
+            }
         }
         if (!result) {
-            Log.d(TAG, "No blocked game process found in foreground")
+            Log.d(TAG, "No blocked game process found in foreground/visible")
         }
         return result
     }
@@ -202,12 +239,14 @@ class GameTimeService : AccessibilityService() {
         ActivityLog.record("STUDY", DUOLINGO_PACKAGE, "开始学习多邻国")
         Log.d(TAG, "Enter STUDYING")
         handler.postDelayed(studyTick, STUDY_TICK_MS)
+        handler.postDelayed(studyGuardCheck, STUDY_GUARD_MS)
         updateNotification("学习中…")
     }
 
     private fun exitStudying() {
         if (state != State.STUDYING) return
         handler.removeCallbacks(studyTick)
+        handler.removeCallbacks(studyGuardCheck)
         val elapsedSeconds = (System.currentTimeMillis() - lastStudyTickTime) / 1000
         if (elapsedSeconds > 0) {
             val earned = ExchangeEngine.calculateEarnedSeconds(
