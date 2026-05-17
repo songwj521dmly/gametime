@@ -10,7 +10,7 @@ import java.time.ZonedDateTime
 object TimeBank {
     private const val PREFS_NAME = "time_bank"
     private const val KEY_GAME_BALANCE_SECONDS = "game_balance_seconds"
-    private const val KEY_DAILY_STUDY = "daily_study"        // JSON: {"2026-05-17": 240, ...}
+    private const val KEY_DAILY_STUDY = "daily_study"        // JSON: {"2026-05-17": 600, ...}
     private const val KEY_BLOCKED_PACKAGES = "blocked_packages"
     private const val KEY_WORKDAY_LIMIT_MINUTES = "workday_limit_minutes"
     private const val KEY_HOLIDAY_LIMIT_MINUTES = "holiday_limit_minutes"
@@ -208,7 +208,7 @@ object TimeBank {
         var cursor = if (map.containsKey(today.toString())) today else today.minusDays(1)
         while (true) {
             val seconds = map[cursor.toString()] ?: 0L
-            if (seconds >= 240) {
+            if (seconds >= 600) {
                 streak++
                 cursor = cursor.minusDays(1)
             } else {
@@ -221,7 +221,7 @@ object TimeBank {
 
     fun getLastStudyDate(): String? {
         val map = parseDailyMap()
-        return map.filter { it.value >= 240 }.keys.maxOrNull()
+        return map.filter { it.value >= 600 }.keys.maxOrNull()
     }
 
     // --- Blocked Packages ---

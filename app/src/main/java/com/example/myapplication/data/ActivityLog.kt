@@ -36,6 +36,8 @@ object ActivityLog {
             return zdt.format(formatter)
         }
 
+        fun appName(): String = packageNameToApp(packageName)
+
         fun toJson(): String {
             val escapedDetail = detail.replace("\\", "\\\\").replace("\"", "\\\"")
             return "{\"t\":$timestamp,\"type\":\"$type\",\"pkg\":\"$packageName\",\"d\":\"$escapedDetail\"}"
@@ -55,6 +57,22 @@ object ActivityLog {
                 }
             }
         }
+    }
+
+    fun packageNameToApp(pkg: String): String = when (pkg) {
+        "" -> ""
+        "com.duolingo" -> "多邻国"
+        "com.tencent.tmgp.sgame" -> "王者荣耀"
+        "com.tencent.tmgp.pubgmhd" -> "和平精英"
+        "com.miHoYo.GenshinImpact" -> "原神"
+        "com.HoYoverse.hkrpgoversea" -> "崩坏：星穹铁道"
+        "com.hypergryph.arknights" -> "明日方舟"
+        "com.tencent.jkchess" -> "金铲铲之战"
+        "com.netease.party" -> "蛋仔派对"
+        "com.netease.sky" -> "光遇"
+        "com.tgc.sky" -> "光遇"
+        "com.meta.box" -> "233乐园"
+        else -> pkg.substringAfterLast(".")
     }
 
     fun record(type: String, packageName: String, detail: String) {

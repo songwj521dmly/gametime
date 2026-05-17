@@ -89,13 +89,13 @@ class GameTimeService : AccessibilityService() {
         override fun run() {
             if (!isGameForeground) return
 
-            // Every 3 seconds (starting from 3rd tick), verify game process is still running
-            if (consumeTickCount > 0 && consumeTickCount % 3 == 0) {
+            // Every 5 seconds, verify game process is still running
+            if (consumeTickCount > 0 && consumeTickCount % 5 == 0) {
                 if (!isGameProcessStillForeground()) {
                     processCheckFailures++
-                    Log.d(TAG, "Process check failed ($processCheckFailures/2)")
-                    if (processCheckFailures >= 2) {
-                        Log.d(TAG, "Game process lost (2 consecutive failures), stopping")
+                    Log.d(TAG, "Process check failed ($processCheckFailures/3)")
+                    if (processCheckFailures >= 3) {
+                        Log.d(TAG, "Game process lost (3 consecutive failures), stopping")
                         stopConsuming()
                         return
                     }
@@ -196,7 +196,12 @@ class GameTimeService : AccessibilityService() {
 
         when {
             pkg == DUOLINGO_PACKAGE -> handleDuolingoEvent(event)
-            blockedPackages.contains(pkg) -> handleGameEvent(event, pkg)
+            blockedPackages.contains(pkg) -> {
+                if (isGameForeground && pkg == currentGamePkg) {
+                    processCheckFailures = 0
+                }
+                handleGameEvent(event, pkg)
+            }
         }
     }
 
@@ -234,6 +239,10 @@ class GameTimeService : AccessibilityService() {
     }
 
     private fun enterStudying() {
+        if (isGameForeground) {
+            Log.d(TAG, "Game still foreground, stopping before study")
+            stopConsuming()
+        }
         state = State.STUDYING
         lastStudyTickTime = System.currentTimeMillis()
         ActivityLog.record("STUDY", DUOLINGO_PACKAGE, "开始学习多邻国")
@@ -302,6 +311,10 @@ class GameTimeService : AccessibilityService() {
             }
             // All clear - start game
             !isGameForeground -> {
+                if (state == State.STUDYING) {
+                    Log.d(TAG, "Studying still active, exiting before game")
+                    exitStudying()
+                }
                 isGameForeground = true
                 currentGamePkg = pkg
                 ActivityLog.record("GAME_OPEN", pkg, "游戏启动: $pkg, 余额: ${balance}s, 今日剩余: ${dailyRemaining}s")

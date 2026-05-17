@@ -1,7 +1,10 @@
 package com.example.myapplication.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -61,6 +64,7 @@ fun DashboardScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -202,7 +206,7 @@ fun DashboardScreen(
             ) {
                 Text(
                     text = when {
-                        studySeconds < 240 -> "今天学满4分钟打卡，解锁游戏时间！"
+                        studySeconds < 600 -> "今天学满10分钟打卡，解锁游戏时间！"
                         gameBalanceSeconds > 0 -> "尽情游戏吧，注意时间哦～"
                         else -> "多学多玩，加油！"
                     },
@@ -237,32 +241,20 @@ private fun StreakMilestones(currentStreak: Int, modifier: Modifier = Modifier) 
             ) {
                 // Circle indicator
                 Surface(
-                    shape = androidx.compose.foundation.shape.CircleShape,
-                    color = when {
-                        achieved -> MaterialTheme.colorScheme.primary
-                        isCurrent -> MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                        else -> MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f)
-                    },
+                    shape = CircleShape,
+                    color = if (achieved) Color.White
+                            else MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(2.dp, if (achieved || isCurrent) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.size(32.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         if (achieved) {
-                            Text(
-                                "✓",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
+                            Text("🥢", fontSize = 18.sp)
+                        } else if (isCurrent) {
+                            Text("💩", fontSize = 18.sp)
                         } else {
-                            Text(
-                                "$day",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (isCurrent)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
-                            )
+                            Text("💩", fontSize = 18.sp, color = MaterialTheme.colorScheme.outline)
                         }
                     }
                 }
@@ -274,7 +266,7 @@ private fun StreakMilestones(currentStreak: Int, modifier: Modifier = Modifier) 
                     color = if (achieved)
                         MaterialTheme.colorScheme.primary
                     else
-                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
+                        MaterialTheme.colorScheme.outline
                 )
             }
         }

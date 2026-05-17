@@ -86,7 +86,9 @@ fun LogScreen(onBack: () -> Unit) {
                         ) {
                             Text(icon, fontSize = 20.sp)
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(label, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                                val name = event.appName()
+                                val title = if (name.isNotEmpty()) "$label · $name" else label
+                                Text(title, fontWeight = FontWeight.Medium, fontSize = 14.sp)
                                 Text(
                                     event.detail,
                                     fontSize = 12.sp,
