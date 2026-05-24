@@ -114,7 +114,7 @@ object EmailReporter {
                 return@withContext Result.failure(Exception("邮件未配置"))
             }
 
-            val summary = ActivityLog.getTodaySummary()
+            val htmlReport = ActivityLog.getTodayHtmlReport()
 
             val props = Properties().apply {
                 put("mail.smtp.host", "smtp.qq.com")
@@ -137,12 +137,12 @@ object EmailReporter {
                 setFrom(InternetAddress(sender))
                 setRecipient(Message.RecipientType.TO, InternetAddress(recipient))
                 subject = "GameTime 每日报告 | $todayStr"
-                setText(summary, "UTF-8")
+                setContent(htmlReport, "text/html; charset=UTF-8")
             }
 
             Transport.send(message)
             Log.d(TAG, "Email sent successfully to $recipient")
-            Result.success(summary)
+            Result.success("邮件发送成功: $todayStr")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send email: ${e.message}", e)
             Result.failure(e)

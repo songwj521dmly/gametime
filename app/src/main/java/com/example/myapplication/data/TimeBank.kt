@@ -2,6 +2,7 @@ package com.example.myapplication.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -19,6 +20,15 @@ object TimeBank {
     private const val KEY_HOURLY_STUDY = "hourly_study"      // JSON: {"2026-05-17": {"8": 15, "9": 30}, ...}
     private const val KEY_HOURLY_GAME = "hourly_game"        // JSON: {"2026-05-17": {"14": 5, "15": 10}, ...}
     private const val KEY_LAST_SETTLEMENT_MS = "last_settlement_ms"
+    private const val KEY_LAST_HEARTBEAT_MS = "last_heartbeat_ms"
+    private const val KEY_LAST_HEARTBEAT_ELAPSED = "last_heartbeat_elapsed"
+    private const val KEY_LAST_KILL_TIME_MS = "last_kill_time_ms"
+    private const val KEY_KILL_COUNT = "kill_count"
+    private const val KEY_KILL_WEEK_START = "kill_week_start"
+    private const val KEY_LAST_PENALTY_SECONDS = "last_penalty_seconds"
+    private const val KEY_LAST_DEAD_MINUTES = "last_dead_minutes"
+    private const val KEY_LAST_KILL_COUNT_FOR_DIALOG = "last_kill_count_dialog"
+    private const val HEARTBEAT_GAP_KILL_MS = 90_000L  // 3x 30s heartbeat interval = killed
     private const val ZONE = "+08:00"
 
     val zoneId: ZoneId = ZoneId.of(ZONE)
@@ -339,6 +349,135 @@ object TimeBank {
     }
 
     // --- Chart Data ---
+
+    // --- Heartbeat, Kill Detection & Penalty ---
+
+    enum class KillType {
+        NOT_KILLED, REBOOTED, FIRST_WARNING, PENALTY
+    }
+
+    data class KillResult(
+        val type: KillType,
+        val killTimeMs: Long,
+        val killCount: Int,
+        val penaltySeconds: Long,
+        val deadMinutes: Long
+    )
+
+    fun writeHeartbeat() {
+        prefs.edit()
+            .putLong(KEY_LAST_HEARTBEAT_MS, System.currentTimeMillis())
+            .putLong(KEY_LAST_HEARTBEAT_ELAPSED, SystemClock.elapsedRealtime())
+            .apply()
+    }
+
+    /**
+     * Detect if the app was force-killed. Handles reboot detection, weekly kill count,
+     * and penalty calculation. Returns detailed result for UI/logging.
+     */
+    fun detectKill(): KillResult {
+        val lastHeartbeat = prefs.getLong(KEY_LAST_HEARTBEAT_MS, 0L)
+        if (lastHeartbeat == 0L) return KillResult(KillType.NOT_KILLED, 0L, 0, 0L, 0L)
+
+        val gap = System.currentTimeMillis() - lastHeartbeat
+        if (gap <= HEARTBEAT_GAP_KILL_MS) return KillResult(KillType.NOT_KILLED, 0L, 0, 0L, 0L)
+
+        // Check if device rebooted (battery died or manual shutdown)
+        val lastElapsed = prefs.getLong(KEY_LAST_HEARTBEAT_ELAPSED, 0L)
+        val currentElapsed = SystemClock.elapsedRealtime()
+        val elapsedGap = currentElapsed - lastElapsed
+        // If elapsed time decreased or went backwards, device rebooted
+        if (elapsedGap < 0 || elapsedGap < gap * 0.5) {
+            // Device rebooted - reset heartbeat, no penalty
+            prefs.edit()
+                .putLong(KEY_LAST_HEARTBEAT_MS, 0L)
+                .putLong(KEY_LAST_HEARTBEAT_ELAPSED, 0L)
+                .apply()
+            return KillResult(KillType.REBOOTED, lastHeartbeat, 0, 0L,
+                (System.currentTimeMillis() - lastHeartbeat) / 60_000L)
+        }
+
+        // Confirmed force-kill (system kept running but app was killed)
+        val killTime = lastHeartbeat
+        val deadMinutes = gap / 60_000L
+
+        // Weekly kill count
+        val today = LocalDate.now(zoneId)
+        val weekStart = today.with(java.time.DayOfWeek.MONDAY)
+        val weekStartEpoch = weekStart.atStartOfDay(zoneId).toEpochSecond() * 1000L
+        val storedWeekStart = prefs.getLong(KEY_KILL_WEEK_START, 0L)
+
+        var killCount = if (weekStartEpoch == storedWeekStart) {
+            prefs.getInt(KEY_KILL_COUNT, 0)
+        } else {
+            0  // New week, reset count
+        }
+        killCount++
+
+        val dailyLimit = getDailyGameLimitSeconds()
+
+        val type: KillType
+        val penaltySeconds: Long
+
+        if (killCount == 1) {
+            // First kill this week: warning only
+            type = KillType.FIRST_WARNING
+            penaltySeconds = 0L
+        } else {
+            // Second+ kill this week: penalty based on dead time, capped at daily limit
+            type = KillType.PENALTY
+            penaltySeconds = minOf(deadMinutes * 60L, dailyLimit)
+            // Apply penalty (allow negative balance)
+            applyKillPenalty(penaltySeconds)
+        }
+
+        // Save state
+        prefs.edit()
+            .putLong(KEY_LAST_KILL_TIME_MS, killTime)
+            .putLong(KEY_LAST_HEARTBEAT_MS, 0L)       // Reset heartbeat
+            .putLong(KEY_LAST_HEARTBEAT_ELAPSED, 0L)
+            .putInt(KEY_KILL_COUNT, killCount)
+            .putLong(KEY_KILL_WEEK_START, weekStartEpoch)
+            .putLong(KEY_LAST_PENALTY_SECONDS, penaltySeconds)
+            .putLong(KEY_LAST_DEAD_MINUTES, deadMinutes)
+            .putInt(KEY_LAST_KILL_COUNT_FOR_DIALOG, killCount)
+            .apply()
+
+        return KillResult(type, killTime, killCount, penaltySeconds, deadMinutes)
+    }
+
+    private fun applyKillPenalty(seconds: Long) {
+        val current = getGameBalance()
+        // Allow negative balance
+        prefs.edit().putLong(KEY_GAME_BALANCE_SECONDS, current - seconds).apply()
+        // Also record as daily game consumed
+        if (seconds > 0) {
+            recordDailyGameConsumed(seconds)
+        }
+    }
+
+    fun getLastKillTimeMs(): Long = prefs.getLong(KEY_LAST_KILL_TIME_MS, 0L)
+
+    fun getLastPenaltySeconds(): Long = prefs.getLong(KEY_LAST_PENALTY_SECONDS, 0L)
+
+    fun getLastDeadMinutes(): Long = prefs.getLong(KEY_LAST_DEAD_MINUTES, 0L)
+
+    fun getLastKillCountForDialog(): Int = prefs.getInt(KEY_LAST_KILL_COUNT_FOR_DIALOG, 0)
+
+    fun clearKillFlag() {
+        prefs.edit()
+            .putLong(KEY_LAST_KILL_TIME_MS, 0L)
+            .putLong(KEY_LAST_PENALTY_SECONDS, 0L)
+            .putLong(KEY_LAST_DEAD_MINUTES, 0L)
+            .putInt(KEY_LAST_KILL_COUNT_FOR_DIALOG, 0)
+            .apply()
+    }
+
+    fun formatKillTime(killTimeMs: Long): String {
+        val zdt = ZonedDateTime.ofInstant(Instant.ofEpochMilli(killTimeMs), zoneId)
+        val fmt = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 HH时mm分ss秒")
+        return zdt.format(fmt)
+    }
 
     data class DayStats(
         val date: String,

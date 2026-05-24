@@ -39,6 +39,27 @@ class MainActivity : ComponentActivity() {
         AppUsageTracker.startPeriodicCheck()
         EmailReportReceiver.schedule(this)
         ServiceGuardReceiver.schedule(this)
+
+        // Detect if app was force-killed (service may not have started yet)
+        val killResult = TimeBank.detectKill()
+        when (killResult.type) {
+            TimeBank.KillType.FIRST_WARNING -> {
+                val formattedTime = TimeBank.formatKillTime(killResult.killTimeMs)
+                EmailReporter.sendAlert(
+                    "应用进程被手动关闭(第1次警告)",
+                    "GameTime 进程被手动杀死\n\n杀死时间: $formattedTime\n关闭时长: ${killResult.deadMinutes}分钟\n\n本周第1次，仅警告。再次关闭将扣除游戏时间。"
+                )
+            }
+            TimeBank.KillType.PENALTY -> {
+                val formattedTime = TimeBank.formatKillTime(killResult.killTimeMs)
+                EmailReporter.sendAlert(
+                    "应用进程被手动关闭(扣除惩罚)",
+                    "GameTime 进程被手动杀死\n\n杀死时间: $formattedTime\n关闭时长: ${killResult.deadMinutes}分钟\n本周第${killResult.killCount}次关闭\n惩罚: 扣除${killResult.penaltySeconds / 60}分钟游戏时间"
+                )
+            }
+            else -> {}
+        }
+
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
@@ -62,6 +83,57 @@ fun MainNavHost() {
     var pendingScreen by remember { mutableStateOf<Screen?>(null) }
     var pinInput by remember { mutableStateOf("") }
     var pinError by remember { mutableStateOf(false) }
+
+    // Kill detection dialog
+    val killTimeMs = TimeBank.getLastKillTimeMs()
+    val penaltySeconds = TimeBank.getLastPenaltySeconds()
+    val deadMinutes = TimeBank.getLastDeadMinutes()
+    val killCount = TimeBank.getLastKillCountForDialog()
+    var showKillDialog by remember { mutableStateOf(killTimeMs > 0L) }
+
+    if (showKillDialog && killTimeMs > 0L) {
+        val formattedTime = TimeBank.formatKillTime(killTimeMs)
+        val isFirstKill = penaltySeconds <= 0L
+        AlertDialog(
+            onDismissRequest = {
+                showKillDialog = false
+                TimeBank.clearKillFlag()
+            },
+            title = {
+                Text(
+                    if (isFirstKill) "⚠️ 警告" else "⛔ 惩罚通知",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                val msg = buildString {
+                    append("检测到应用在上次被手动关闭！\n\n")
+                    append("关闭时间: $formattedTime\n")
+                    append("关闭时长: ${deadMinutes}分钟\n")
+                    if (isFirstKill) {
+                        append("\n这是本周第1次关闭，仅作警告。\n")
+                        append("如再次关闭将被扣除游戏时间！")
+                    } else {
+                        val penaltyMin = penaltySeconds / 60
+                        append("\n本周第${killCount}次关闭！\n")
+                        append("惩罚: 扣除 ${penaltyMin}分钟 游戏时间\n")
+                        append("(已从余额扣除，可扣至负值)")
+                    }
+                    append("\n\n此行为已记录并通知家长。")
+                    append("\n请不要手动关闭此应用。")
+                }
+                Text(msg)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showKillDialog = false
+                    TimeBank.clearKillFlag()
+                }) {
+                    Text("我知道了")
+                }
+            }
+        )
+    }
 
     // PIN dialog
     if (pendingScreen != null) {

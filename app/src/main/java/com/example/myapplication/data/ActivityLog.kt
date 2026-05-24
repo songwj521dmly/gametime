@@ -208,4 +208,147 @@ object ActivityLog {
             appendLine("报告生成: ${java.time.LocalTime.now(zoneId).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))}")
         }
     }
+
+    fun getTodayHtmlReport(): String {
+        val today = LocalDate.now(zoneId)
+        val todayStr = today.toString()
+        val dayOfWeek = today.dayOfWeek
+        val dayNames = mapOf(
+            DayOfWeek.MONDAY to "周一",
+            DayOfWeek.TUESDAY to "周二",
+            DayOfWeek.WEDNESDAY to "周三",
+            DayOfWeek.THURSDAY to "周四",
+            DayOfWeek.FRIDAY to "周五",
+            DayOfWeek.SATURDAY to "周六",
+            DayOfWeek.SUNDAY to "周日"
+        )
+        val todayEvents = getEventsForDate(todayStr)
+        val hourlyStats = TimeBank.getHourlyStats(todayStr)
+        val studySeconds = TimeBank.getStudySecondsToday()
+        val gameConsumed = TimeBank.getGameConsumedSecondsToday()
+        val balance = TimeBank.getGameBalance()
+        val streak = TimeBank.getConsecutiveDays()
+        val bonus = TimeBank.getCurrentStreakBonus()
+        val isWeekend = TimeBank.isWeekend()
+        val gameRemaining = TimeBank.getDailyGameRemainingSeconds()
+        val gameLimit = TimeBank.getDailyGameLimitSeconds()
+
+        fun fmt(sec: Long) = if (sec >= 3600) "${sec / 3600}h${(sec % 3600) / 60}m" else "${sec / 60}m${sec % 60}s"
+
+        val maxMinutes = hourlyStats.maxOfOrNull {
+            (it.studySeconds / 60 + it.gameSeconds / 60).toInt()
+        }?.coerceAtLeast(1) ?: 1
+
+        val chartBars = StringBuilder()
+        hourlyStats.forEach { stat ->
+            val studyPct = (stat.studySeconds.toFloat() / 60f / maxMinutes * 100).toInt().coerceAtMost(100)
+            val gamePct = (stat.gameSeconds.toFloat() / 60f / maxMinutes * 100).toInt().coerceAtMost(100)
+            chartBars.append("""
+                <tr>
+                    <td style="color:#8e8e93;font-size:11px;text-align:right;padding-right:6px;width:24px">${stat.hour}</td>
+                    <td style="vertical-align:bottom;height:60px;padding:1px 0">
+                        <div style="display:flex;align-items:flex-end;height:100%;gap:2px">
+                            ${if (stat.studySeconds > 0) "<div style=\"width:14px;height:${studyPct}%;background:#34C759;border-radius:3px 3px 0 0;min-height:2px\" title=\"学习 ${fmt(stat.studySeconds)}\"></div>" else ""}
+                            ${if (stat.gameSeconds > 0) "<div style=\"width:14px;height:${gamePct}%;background:#FF6B6B;border-radius:3px 3px 0 0;min-height:2px\" title=\"游戏 ${fmt(stat.gameSeconds)}\"></div>" else ""}
+                        </div>
+                    </td>
+                </tr>
+            """.trimIndent())
+        }
+
+        val detailEvents = todayEvents.filter {
+            it.type in listOf("STUDY_END", "GAME_OPEN", "GAME_CLOSE", "GAME_BLOCK")
+        }.take(10)
+
+        val eventRows = if (detailEvents.isEmpty()) {
+            "<tr><td colspan=\"2\" style=\"color:#8e8e93;text-align:center;padding:20px;font-size:13px\">今日暂无活动记录</td></tr>"
+        } else {
+            detailEvents.joinToString("") { event ->
+                val icon = when (event.type) {
+                    "STUDY_END" -> "📕"
+                    "GAME_OPEN" -> "🎮"
+                    "GAME_CLOSE" -> "🚪"
+                    "GAME_BLOCK" -> "🚫"
+                    else -> "•"
+                }
+                val label = when (event.type) {
+                    "STUDY_END" -> "结束学习"
+                    "GAME_OPEN" -> "游戏启动"
+                    "GAME_CLOSE" -> "游戏关闭"
+                    "GAME_BLOCK" -> "拦截"
+                    else -> event.type
+                }
+                "<tr><td style=\"padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:13px\">$icon $label · ${event.appName()}</td><td style=\"padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:11px;color:#8e8e93;text-align:right\">${event.formattedTime()}</td></tr>"
+            }
+        }
+
+        return """
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:0;background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f2f2f7;padding:20px 0">
+<tr><td align="center">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#fff;border-radius:16px;overflow:hidden">
+
+<!-- Header -->
+<tr><td style="padding:24px 20px 16px;text-align:center">
+    <div style="font-size:22px;font-weight:700;color:#1c1c1e">📊 GameTime</div>
+    <div style="font-size:13px;color:#8e8e93;margin-top:4px">${todayStr} ${dayNames[dayOfWeek] ?: ""} · ${if (isWeekend) "节假日" else "工作日"}</div>
+</td></tr>
+
+<!-- Stats Row -->
+<tr><td style="padding:8px 20px">
+    <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+            <td width="50%" style="padding:12px;background:#F0FFF4;border-radius:12px;vertical-align:top">
+                <div style="font-size:12px;color:#34C759;font-weight:600">📖 今日学习</div>
+                <div style="font-size:28px;font-weight:700;color:#1c1c1e;margin-top:2px">${fmt(studySeconds)}</div>
+                <div style="font-size:11px;color:#8e8e93;margin-top:2px">🔥 ${streak}天 +${(bonus * 100).toInt()}%</div>
+            </td>
+            <td width="8px"></td>
+            <td width="50%" style="padding:12px;background:#FFF0F0;border-radius:12px;vertical-align:top">
+                <div style="font-size:12px;color:#FF6B6B;font-weight:600">🎮 今日游戏</div>
+                <div style="font-size:28px;font-weight:700;color:#1c1c1e;margin-top:2px">${fmt(gameConsumed)}</div>
+                <div style="font-size:11px;color:#8e8e93;margin-top:2px">剩余 ${fmt(gameRemaining)} / ${fmt(gameLimit)}</div>
+            </td>
+        </tr>
+    </table>
+</td></tr>
+
+<!-- Hourly Chart -->
+<tr><td style="padding:20px 16px">
+    <div style="font-size:14px;font-weight:600;color:#1c1c1e;margin-bottom:10px">📈 每小时分布 (0h-23h)</div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;font-size:10px;color:#8e8e93">
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#34C759"></span>学习
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#FF6B6B"></span>游戏
+        <span style="margin-left:auto">每格 = ${maxMinutes}分钟</span>
+    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #e8e8ed">
+        $chartBars
+    </table>
+</td></tr>
+
+<!-- Recent Activity -->
+<tr><td style="padding:16px 20px">
+    <div style="font-size:14px;font-weight:600;color:#1c1c1e;margin-bottom:8px">📋 最近活动</div>
+    <table width="100%" cellpadding="0" cellspacing="0">
+        $eventRows
+    </table>
+</td></tr>
+
+<!-- Footer -->
+<tr><td style="padding:16px 20px 24px;text-align:center">
+    <div style="font-size:11px;color:#c7c7cc">
+        ⏰ 可用余额 ${fmt(balance)} · GameTime
+    </div>
+</td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>
+        """.trimIndent()
+    }
 }

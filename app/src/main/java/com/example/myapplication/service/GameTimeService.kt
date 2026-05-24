@@ -26,6 +26,7 @@ import com.example.myapplication.data.ActivityLog
 import com.example.myapplication.data.EmailReporter
 import com.example.myapplication.data.TimeBank
 import com.example.myapplication.model.ExchangeEngine
+import com.example.myapplication.receiver.ServiceGuardReceiver
 
 class GameTimeService : AccessibilityService() {
 
@@ -87,6 +88,13 @@ class GameTimeService : AccessibilityService() {
     private var consumeTickCount = 0
     private var processCheckFailures = 0
     private var totalConsumedThisSession = 0L
+
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            TimeBank.writeHeartbeat()
+            handler.postDelayed(this, 30_000L)
+        }
+    }
 
     private val consumeTick = object : Runnable {
         override fun run() {
@@ -193,6 +201,33 @@ class GameTimeService : AccessibilityService() {
         }
         serviceInfo = info
         startForeground(NOTIFICATION_ID, buildNotification("就绪"))
+        handler.post(heartbeatRunnable)
+
+        // Check if process was killed
+        val killResult = TimeBank.detectKill()
+        when (killResult.type) {
+            TimeBank.KillType.NOT_KILLED, TimeBank.KillType.REBOOTED -> {}
+            TimeBank.KillType.FIRST_WARNING -> {
+                val formattedTime = TimeBank.formatKillTime(killResult.killTimeMs)
+                Log.w(TAG, "Detected process kill (1st warning) at $formattedTime")
+                ActivityLog.record("APP_KILLED", "", "进程被手动杀死(第1次警告)，时间: $formattedTime")
+                EmailReporter.sendAlert(
+                    "应用进程被手动关闭(第1次警告)",
+                    "GameTime 进程被手动杀死\n\n杀死时间: $formattedTime\n关闭时长: ${killResult.deadMinutes}分钟\n\n本周第1次，仅警告。再次关闭将扣除游戏时间。"
+                )
+            }
+            TimeBank.KillType.PENALTY -> {
+                val formattedTime = TimeBank.formatKillTime(killResult.killTimeMs)
+                val penaltyMinutes = killResult.penaltySeconds / 60
+                Log.w(TAG, "Detected process kill (penalty) at $formattedTime, penalty=${penaltyMinutes}m")
+                ActivityLog.record("APP_KILLED", "", "进程被手动杀死(第${killResult.killCount}次)，扣除${penaltyMinutes}分钟游戏时间，时间: $formattedTime")
+                EmailReporter.sendAlert(
+                    "应用进程被手动关闭(扣除惩罚)",
+                    "GameTime 进程被手动杀死\n\n杀死时间: $formattedTime\n关闭时长: ${killResult.deadMinutes}分钟\n本周第${killResult.killCount}次关闭\n惩罚: 扣除${penaltyMinutes}分钟游戏时间\n\n请检查设备。"
+                )
+            }
+        }
+
         Log.d(TAG, "Service connected")
     }
 
@@ -442,7 +477,7 @@ class GameTimeService : AccessibilityService() {
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "游戏时间管理",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "多邻国学习解锁游戏"
             }
@@ -487,7 +522,15 @@ class GameTimeService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        // Write final heartbeat before dying (normal shutdown, not kill)
+        TimeBank.writeHeartbeat()
         handler.removeCallbacksAndMessages(null)
+        // Schedule a restart via ServiceGuard
+        try {
+            ServiceGuardReceiver.schedule(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to schedule guard on destroy: ${e.message}")
+        }
         super.onDestroy()
     }
 }
